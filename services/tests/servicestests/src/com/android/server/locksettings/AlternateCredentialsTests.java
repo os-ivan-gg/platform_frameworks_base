@@ -641,10 +641,26 @@ public class AlternateCredentialsTests extends BaseLockSettingsServiceTests {
                 .getTimeoutAsDuration().isPositive()).isTrue();
         int[] matched = {-1};
 
-        // a wrong entry reports the protected user's shorter lockout, so the pad stays usable
-        assertThat(dispatch("000800", matched).getTimeoutAsDuration()).isEqualTo(Duration.ZERO);
+        // a wrong entry reports the owner's lockout, the only one; the protected user still opens
+        assertThat(dispatch("000800", matched).getTimeoutAsDuration().isPositive()).isTrue();
         assertThat(dispatch(PROTECTED, matched).isMatched()).isTrue();
         assertThat(matched[0]).isEqualTo(SECONDARY_USER_ID);
+    }
+
+    @Test
+    public void dispatch_reportsTheProtectedUserLockout() {
+        protectedLayout();
+        mInjector.setTimeSinceBoot(Duration.ofSeconds(10));
+        for (int i = 0; i < 5; i++) {
+            mService.verifyCredential(newPin("000" + i), SECONDARY_USER_ID, 0);
+        }
+        int[] matched = {-1};
+
+        // the owner has no lockout, but the protected PIN can't be tried yet: say so instead of
+        // answering a wrong PIN
+        assertThat(dispatch(PROTECTED, matched).getTimeoutAsDuration().isPositive()).isTrue();
+        assertThat(matched[0]).isEqualTo(PRIMARY_USER_ID);
+        assertThat(dispatch(OWNER, matched).isMatched()).isTrue();
     }
 
     @Test

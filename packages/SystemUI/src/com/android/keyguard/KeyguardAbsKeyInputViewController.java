@@ -259,14 +259,7 @@ public abstract class KeyguardAbsKeyInputViewController<T extends KeyguardAbsKey
             if (isValidPassword) {
                 getKeyguardSecurityCallback()
                         .reportUnlockAttempt(userId, mLockDomain, false, timeout, isDuplicate);
-                if (timeout.isPositive() && dispatchesHere()) {
-                    LockoutMessageModel lockout = BouncerMessageStrings.INSTANCE
-                            .primaryAuthLockedOut(AuthenticationMethodModel.Password.INSTANCE,
-                                    (long) Math.ceil(timeout.toMillis() / 1000.0));
-                    mMessageAreaController.setMessage(PluralsMessageFormatter.format(
-                            mView.getResources(), lockout.primaryFormatterArgs(),
-                            lockout.getPrimaryMessage()), /* animate= */ false);
-                } else if (timeout.isPositive()) {
+                if (timeout.isPositive()) {
                     Duration lockoutEndTime = mLockPatternUtils.getLockoutEndTime(userId, mLockDomain);
                     if (mLockDomain == Primary) {
                         handleAttemptLockout(lockoutEndTime);
@@ -311,6 +304,41 @@ public abstract class KeyguardAbsKeyInputViewController<T extends KeyguardAbsKey
         });
     }
 
+    /**
+     * Nobody matched an entry on user 0's pad. {@code timeout} is the lockout the service
+     * reported, user 0's or the protected user's. It is shown as the bouncer's countdown, but the
+     * pad stays usable so the other user and duress can still be entered. Only an entry that
+     * user 0's limiter let through counts as a user 0 failure, with user 0's own lockout.
+     */
+    private void onDispatchMissed(Duration timeout, boolean ownerChecked, boolean isDuplicate) {
+        mBouncerHapticPlayer.playAuthenticationFeedback(/* authenticationSucceeded = */false);
+        mView.resetPasswordText(true /* animate */, false /* announce deletion if no match */);
+        if (ownerChecked) {
+            getKeyguardSecurityCallback().reportUnlockAttempt(UserHandle.USER_SYSTEM, Primary,
+                    false, ownerLockoutRemaining(), isDuplicate);
+        }
+        if (timeout.isPositive()) {
+            long seconds = (long) Math.ceil(timeout.toMillis() / 1000.0);
+            LockoutMessageModel lockout = BouncerMessageStrings.INSTANCE.primaryAuthLockedOut(
+                    AuthenticationMethodModel.Password.INSTANCE, seconds);
+            mMessageAreaController.setMessage(PluralsMessageFormatter.format(
+                    mView.getResources(), lockout.primaryFormatterArgs(),
+                    lockout.getPrimaryMessage()), /* animate= */ false);
+            // the legacy message area above is off with the revamped bouncer messages; this
+            // starts the countdown the bouncer shows
+            getKeyguardSecurityCallback().onAttemptLockoutStart(getSecurityMode(), seconds);
+        } else {
+            mMessageAreaController.setMessage(mView.getWrongPasswordStringId(isDuplicate));
+        }
+        startErrorAnimation();
+    }
+
+    private Duration ownerLockoutRemaining() {
+        Duration left = mLockPatternUtils.getLockoutEndTime(UserHandle.USER_SYSTEM, Primary)
+                .minusMillis(SystemClock.elapsedRealtime());
+        return left.isPositive() ? left : Duration.ZERO;
+    }
+
     // User 0's pad checks user 0 and the protected user, each with its own lockout. The pad
     // stays usable during a lockout so the other user and duress can still be entered.
     private boolean dispatchesHere() {
@@ -346,7 +374,9 @@ public abstract class KeyguardAbsKeyInputViewController<T extends KeyguardAbsKey
 
         mKeyguardUpdateMonitor.setCredentialAttempted();
         if (userId == UserHandle.USER_SYSTEM && mLockDomain == Primary) {
-            // user 0's pad also opens the protected user, if the device has one
+            // user 0's pad also opens the protected user, if the device has one. During user
+            // 0's lockout its limiter refuses the entry unchecked: not a user 0 failure
+            final boolean ownerChecked = !ownerLockoutRemaining().isPositive();
             mPendingLockCheck = LockPatternChecker.dispatchCredential(mLockPatternUtils, password,
                     new LockPatternChecker.OnDispatchCallback() {
                         @Override
@@ -358,9 +388,11 @@ public abstract class KeyguardAbsKeyInputViewController<T extends KeyguardAbsKey
                             mPendingLockCheck = null;
                             if (response.isMatched() && matchedUserId != userId) {
                                 onOtherUserMatched(matchedUserId);
+                            } else if (response.isMatched()) {
+                                onPasswordChecked(userId, true /* matched */, Duration.ZERO,
+                                        true /* isValidPassword */, false /* isDuplicate */);
                             } else {
-                                onPasswordChecked(userId, response.isMatched(),
-                                        response.getTimeout(), true /* isValidPassword */,
+                                onDispatchMissed(response.getTimeout(), ownerChecked,
                                         lockscreenIndicateDuplicateGuesses()
                                                 && response.isCredAlreadyTried());
                             }

@@ -370,6 +370,9 @@ constructor(
                 }
             }
         val msBeforeReset = secondsBeforeLockoutReset * 1000
+        // user 0's pad reports a new lockout with every refused entry, and it can be a different
+        // user's (KeyguardAbsKeyInputViewController#onDispatchMissed): the latest one is shown
+        countDownTimerUtil.cancelTimer()
         countDownTimerUtil.startTimer(msBeforeReset, 1000, callback)
         val countdownUserId = currentUserId
 

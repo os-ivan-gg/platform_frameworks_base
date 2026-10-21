@@ -4653,8 +4653,10 @@ public class LockSettingsService extends ILockSettings.Stub {
     /**
      * The lock screen's single PIN entry. Tries user 0, then the protected user when the device
      * has one; duress and the reboot credential follow as after any failed check. Returns the
-     * response of the matching user, or the shorter lockout of the two, so a user in lockout
-     * doesn't block the other. {@code matchedUserId[0]} is the user to switch to.
+     * response of the matching user. Otherwise the shorter lockout of the two, or the only one,
+     * so the lock screen can show it: a user in lockout doesn't block the other, and a correct
+     * PIN that is refused for a lockout doesn't read as a wrong one (doc 04, 2026-10-21).
+     * {@code matchedUserId[0]} is the user to switch to.
      */
     @Override
     public VerifyCredentialResponse dispatchCredential(LockscreenCredential credential,
@@ -4699,7 +4701,12 @@ public class LockSettingsService extends ILockSettings.Stub {
                 matchedUserId[0] = protectedUser;
                 return other;
             }
-            return other.getTimeoutAsDuration().compareTo(owner.getTimeoutAsDuration()) < 0
+            final Duration ownerTimeout = owner.getTimeoutAsDuration();
+            final Duration otherTimeout = other.getTimeoutAsDuration();
+            if (!otherTimeout.isPositive()) {
+                return owner;
+            }
+            return !ownerTimeout.isPositive() || otherTimeout.compareTo(ownerTimeout) < 0
                     ? other : owner;
         } finally {
             if (!otherMatched) {
